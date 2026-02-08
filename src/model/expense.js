@@ -42,7 +42,7 @@ const expenseSchema = new mongoose.Schema({
         type: String,
         enum: ["equal", "unequal"],
         default: "equal"
-    }
+    },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Expense', expenseSchema);
