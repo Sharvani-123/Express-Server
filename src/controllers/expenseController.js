@@ -35,7 +35,7 @@ const expenseController ={
             finalParticipants = participants.map(p => ({
                 userId: p.userId,
                 share: p.share,
-                paid: 0
+                paid: p.paid || 0
             }));
         }
 
@@ -61,7 +61,54 @@ const expenseController ={
     }
     },
     summary: async (req,res) => {
-        
+        try {
+            const {groupId} = req.params;
+
+            const expenses = await expenseDao.getExpensesByGroup(groupId);
+
+            if(!expenses || expenses.length ===0 ){
+                return res.status(404).json({
+                    message:"No expense found for this group"
+                });
+            }
+
+            const balance={};
+
+            expenses.forEach(expense =>{
+                const payer= expense.paidBy.toString();
+
+                expense.participants.forEach(p=>{
+                    const user= p.userId.toString();
+                    const share= p.share;
+                    const paid= p.paid || 0;
+
+                    if(!balance[user]) balance[user]=0;
+                    if(!balance[payer]) balance[payer] =0;
+
+                    if(user!==payer){
+                        const owes= share-paid;
+
+                        balance[user] += owes;
+                        balance[payer]-= owes;
+                    }
+                })
+            });
+
+            const summary = Object.entries(balance).map(([userId,amount])=>({
+                userId,
+                balance:amount
+            }));
+
+            res.status(200).json({
+                message:"Group summary fetched.",
+                data:summary
+            });
+        } catch(error){
+            console.log(error);
+            res.status(500).json({
+                message: "Internal Server Error"
+            });
+        }
     },
     settle:async (req,res) => {
         try {
