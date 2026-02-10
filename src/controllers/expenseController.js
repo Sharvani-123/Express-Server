@@ -7,14 +7,27 @@ const expenseController ={
         try {
         const { groupId, title, amount, paidBy, participants, splitType } = req.body;
 
-        if (!groupId || !title || !amount || !paidBy || !participants?.length) {
+        const amountNum= Number(amount);
+
+        if (!groupId || !title || !amountNum || !paidBy || !participants?.length) {
             return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        if(amountNum<=0){
+            return res.status(400).json({
+                message: "Amount must begreater than zero"
+            });
         }
 
         let finalParticipants = [];
 
         if (splitType === "equal") {
-            const share = amount / participants.length;
+
+            if(!participants.length){
+                return res.status(400).json({ message: "Participants are required" });
+            }
+
+            const share = amountNum / participants.length;
 
             finalParticipants = participants.map(userId => ({
                 userId,
@@ -34,15 +47,15 @@ const expenseController ={
 
             finalParticipants = participants.map(p => ({
                 userId: p.userId,
-                share: p.share,
-                paid: p.paid || 0
+                share: Number(p.share || 0),
+                paid: Number(p.paid || 0)
             }));
         }
 
         const expense = await expenseDao.addExpense({
             groupId,
             title,
-            amount,
+            amount:amountNum,
             paidBy,
             participants: finalParticipants,
             splitType
@@ -67,7 +80,7 @@ const expenseController ={
             const expenses = await expenseDao.getExpensesByGroup(groupId);
 
             if(!expenses || expenses.length ===0 ){
-                return res.status(404).json({
+                return res.status(200).json({
                     message:"No expense found for this group"
                 });
             }
@@ -119,10 +132,20 @@ const expenseController ={
                 return res.status(404).json({message: "Group not found"});
             }
 
-            await expenseDao.updateExpensesByGroup(groupId,{
-                "participants.$[].paid":0
-            });
+            const expenses = await expenseDao.getExpensesByGroup(groupId);
 
+            for (const expense of expenses) {
+                const updatedParticipants = expense.participants.map(p => ({
+                    userId: p.userId,
+                    share: p.share,
+                    paid: p.share
+                }));
+
+                await expenseDao.updateExpense(expense._id, {
+                    participants: updatedParticipants
+                });
+            }
+            
             await groupDao.updateGroup({
                 groupId,
                 name: group.name,
@@ -147,6 +170,7 @@ const expenseController ={
             });
         }
     },
+
     getExpensesByGroup: async (req,res) => {
         try{
             const {groupId}= req.params;
