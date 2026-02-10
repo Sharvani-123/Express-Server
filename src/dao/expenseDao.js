@@ -16,7 +16,9 @@ const expenseDao={
         return await Expense.findByIdAndDelete(expenseId);
     },
     getExpensesByGroup: async (groupId) => {
-        return await Expense.find({ groupId });
+        return await Expense.find({ groupId })
+            .populate('paidBy', 'name email')
+            .populate('participants.userId', 'name email');
     },
     getExpense: async (expenseId) => {
         return await Expense.findById(expenseId);

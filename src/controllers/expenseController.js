@@ -1,6 +1,18 @@
 const expenseDao = require('../dao/expenseDao');
 const groupDao = require('../dao/groupDao');
+const userDao = require('../dao/userDao');
 const Group= require('../model/group');
+const User = require('../model/users');
+const mongoose = require('mongoose');
+
+const isObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
+
+const resolveUserId = async (value) => {
+    if (!value) return null;
+    if (isObjectId(value)) return value;
+    const user = await userDao.findByEmail(value);
+    return user ? user._id : null;
+};
 
 const expenseController ={
     add: async (req,res) => {
@@ -27,9 +39,19 @@ const expenseController ={
                 return res.status(400).json({ message: "Participants are required" });
             }
 
-            const share = amountNum / participants.length;
+            const resolvedParticipants = await Promise.all(
+                participants.map((p) => resolveUserId(p))
+            );
 
-            finalParticipants = participants.map(userId => ({
+            if (resolvedParticipants.some((p) => !p)) {
+                return res.status(400).json({
+                    message: "One or more participants are invalid"
+                });
+            }
+
+            const share = amountNum / resolvedParticipants.length;
+
+            finalParticipants = resolvedParticipants.map(userId => ({
                 userId,
                 share,
                 paid: 0
@@ -37,26 +59,47 @@ const expenseController ={
         }
 
         else {
-            const total = participants.reduce((sum, p) => sum + p.share, 0);
+            const total = participants.reduce(
+                (sum, p) => sum + Number(p.share || 0),
+                0
+            );
 
-            if (total !== amount) {
+            if (Math.abs(total - amountNum) > 0.01) {
                 return res.status(400).json({
                     message: "Shares must sum to total amount" 
                 });
             }
 
-            finalParticipants = participants.map(p => ({
-                userId: p.userId,
-                share: Number(p.share || 0),
-                paid: Number(p.paid || 0)
-            }));
+            const resolvedParticipants = await Promise.all(
+                participants.map(async (p) => {
+                    const resolvedUserId = await resolveUserId(p.userId);
+                    return {
+                        userId: resolvedUserId,
+                        share: Number(p.share || 0),
+                        paid: Number(p.paid || 0)
+                    };
+                })
+            );
+
+            if (resolvedParticipants.some((p) => !p.userId)) {
+                return res.status(400).json({
+                    message: "One or more participants are invalid"
+                });
+            }
+
+            finalParticipants = resolvedParticipants;
+        }
+
+        const resolvedPaidBy = await resolveUserId(paidBy);
+        if (!resolvedPaidBy) {
+            return res.status(400).json({ message: "Paid by user is invalid" });
         }
 
         const expense = await expenseDao.addExpense({
             groupId,
             title,
             amount:amountNum,
-            paidBy,
+            paidBy: resolvedPaidBy,
             participants: finalParticipants,
             splitType
         });
@@ -88,28 +131,45 @@ const expenseController ={
             const balance={};
 
             expenses.forEach(expense =>{
-                const payer= expense.paidBy.toString();
+            const payerId = expense.paidBy._id
+                ? expense.paidBy._id.toString()
+                : expense.paidBy.toString();
 
-                expense.participants.forEach(p=>{
-                    const user= p.userId.toString();
-                    const share= p.share;
-                    const paid= p.paid || 0;
+            expense.participants.forEach(p=>{
+                const userId = p.userId._id
+                    ? p.userId._id.toString()
+                    : p.userId.toString();
+                const share= p.share;
+                const paid= p.paid || 0;
 
-                    if(!balance[user]) balance[user]=0;
-                    if(!balance[payer]) balance[payer] =0;
+                if(!balance[userId]) balance[userId]=0;
+                if(!balance[payerId]) balance[payerId] =0;
 
-                    if(user!==payer){
-                        const owes= share-paid;
+                if(userId!==payerId){
+                    const owes= share-paid;
 
-                        balance[user] += owes;
-                        balance[payer]-= owes;
-                    }
-                })
-            });
+                    balance[userId] += owes;
+                    balance[payerId]-= owes;
+                }
+            })
+        });
+
+            const userIds = Object.keys(balance);
+            const users = await User.find({ _id: { $in: userIds } })
+                .select('name email');
+            const profileById = users.reduce((acc, user) => {
+                acc[user._id.toString()] = {
+                    name: user.name,
+                    email: user.email
+                };
+                return acc;
+            }, {});
 
             const summary = Object.entries(balance).map(([userId,amount])=>({
                 userId,
-                balance:amount
+                name: profileById[userId]?.name || userId,
+                email: profileById[userId]?.email || "",
+                balance: amount
             }));
 
             res.status(200).json({
